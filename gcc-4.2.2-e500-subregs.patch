@@ -1,0 +1,581 @@
+# This patch is an update to the given GCC-4.2.2 of the following patches:
+# gcc-patches/2006-12/msg01387.html
+# gcc-patches/2006-12/msg01513.html
+# gcc-patches/2007-01/msg00021.html
+# Problem showed up as "internal compiler error: Floating point exception"
+# while compiling Glibc's ieee754/ldbl-128ibm/s_cosl.c for E500 target
+# with -mfloat-gprs=double (ppc_85xxDP- ELDK target).
+#
+diff -pur --exclude='*.rej' --exclude='*.orig' gcc-4.2.2.orig/gcc/caller-save.c gcc-4.2.2/gcc/caller-save.c
+--- gcc-4.2.2.orig/gcc/caller-save.c	2007-09-01 17:28:30.000000000 +0200
++++ gcc-4.2.2/gcc/caller-save.c	2008-03-04 11:40:47.000000000 +0100
+@@ -507,10 +507,14 @@ mark_set_regs (rtx reg, rtx setter ATTRI
+       if (!REG_P (inner) || REGNO (inner) >= FIRST_PSEUDO_REGISTER)
+ 	return;
+       regno = subreg_regno (reg);
++      endregno = regno + subreg_nregs (reg);
+     }
+   else if (REG_P (reg)
+ 	   && REGNO (reg) < FIRST_PSEUDO_REGISTER)
+-    regno = REGNO (reg);
++    {
++      regno = REGNO (reg);
++      endregno = regno + hard_regno_nregs[regno][mode];
++    }
+   else
+     return;
+ 
+@@ -534,20 +538,25 @@ add_stored_regs (rtx reg, rtx setter, vo
+   if (GET_CODE (setter) == CLOBBER)
+     return;
+ 
+-  if (GET_CODE (reg) == SUBREG && REG_P (SUBREG_REG (reg)))
+-    {
++  if (GET_CODE (reg) == SUBREG
++      && REG_P (SUBREG_REG (reg))
++      && REGNO (SUBREG_REG (reg)) < FIRST_PSEUDO_REGISTER)
++   {
+       offset = subreg_regno_offset (REGNO (SUBREG_REG (reg)),
+ 				    GET_MODE (SUBREG_REG (reg)),
+ 				    SUBREG_BYTE (reg),
+ 				    GET_MODE (reg));
+-      reg = SUBREG_REG (reg);
++      regno = REGNO (SUBREG_REG (reg)) + offset;
++      endregno = regno + subreg_nregs (reg);
+     }
++  else
++    {
++      if (!REG_P (reg) || REGNO (reg) >= FIRST_PSEUDO_REGISTER)
++       return;
+ 
+-  if (!REG_P (reg) || REGNO (reg) >= FIRST_PSEUDO_REGISTER)
+-    return;
+-
+-  regno = REGNO (reg) + offset;
+-  endregno = regno + hard_regno_nregs[regno][mode];
++      regno = REGNO (reg) + offset;
++      endregno = regno + hard_regno_nregs[regno][mode];
++    }
+ 
+   for (i = regno; i < endregno; i++)
+     SET_REGNO_REG_SET ((regset) data, i);
+diff -pur --exclude='*.rej' --exclude='*.orig' gcc-4.2.2.orig/gcc/df-scan.c gcc-4.2.2/gcc/df-scan.c
+--- gcc-4.2.2.orig/gcc/df-scan.c	2007-09-01 17:28:30.000000000 +0200
++++ gcc-4.2.2/gcc/df-scan.c	2008-03-04 10:33:15.000000000 +0100
+@@ -1081,15 +1081,14 @@ df_ref_record (struct dataflow *dflow, r
+       if (!(dflow->flags & DF_HARD_REGS))
+ 	return;
+ 
+-      /* GET_MODE (reg) is correct here.  We do not want to go into a SUBREG
+-         for the mode, because we only want to add references to regs, which
+-	 are really referenced.  E.g., a (subreg:SI (reg:DI 0) 0) does _not_
+-	 reference the whole reg 0 in DI mode (which would also include
+-	 reg 1, at least, if 0 and 1 are SImode registers).  */
+-      endregno = hard_regno_nregs[regno][GET_MODE (reg)];
+       if (GET_CODE (reg) == SUBREG)
+-        regno += subreg_regno_offset (regno, GET_MODE (SUBREG_REG (reg)),
+-				      SUBREG_BYTE (reg), GET_MODE (reg));
++       {
++         regno += subreg_regno_offset (regno, GET_MODE (SUBREG_REG (reg)),
++                                       SUBREG_BYTE (reg), GET_MODE (reg));
++         endregno = subreg_nregs (reg);
++       }
++      else
++       endregno = hard_regno_nregs[regno][GET_MODE (reg)];
+       endregno += regno;
+ 
+       /*  If this is a multiword hardreg, we create some extra datastructures that 
+diff -pur --exclude='*.rej' --exclude='*.orig' gcc-4.2.2.orig/gcc/doc/tm.texi gcc-4.2.2/gcc/doc/tm.texi
+--- gcc-4.2.2.orig/gcc/doc/tm.texi	2007-03-10 01:59:15.000000000 +0100
++++ gcc-4.2.2/gcc/doc/tm.texi	2008-03-04 10:09:23.000000000 +0100
+@@ -1985,7 +1985,7 @@ registers but takes up 128 bits in memor
+ nonzero.
+ 
+ This macros only needs to be defined if there are cases where
+-@code{subreg_regno_offset} and @code{subreg_offset_representable_p}
++@code{subreg_get_info}
+ would otherwise wrongly determine that a @code{subreg} can be
+ represented by an offset to the register number, when in fact such a
+ @code{subreg} would contain some of the padding not stored in
+diff -pur --exclude='*.rej' --exclude='*.orig' gcc-4.2.2.orig/gcc/flow.c gcc-4.2.2/gcc/flow.c
+--- gcc-4.2.2.orig/gcc/flow.c	2007-09-01 17:28:30.000000000 +0200
++++ gcc-4.2.2/gcc/flow.c	2008-03-04 10:31:05.000000000 +0100
+@@ -2790,8 +2790,7 @@ mark_set_1 (struct propagate_block_info 
+ 	      regno_first += subreg_regno_offset (regno_first, inner_mode,
+ 						  SUBREG_BYTE (reg),
+ 						  outer_mode);
+-	      regno_last = (regno_first
+-			    + hard_regno_nregs[regno_first][outer_mode] - 1);
++              regno_last = (regno_first + subreg_nregs (reg) - 1);
+ 
+ 	      /* Since we've just adjusted the register number ranges, make
+ 		 sure REG matches.  Otherwise some_was_live will be clear
+diff -pur --exclude='*.rej' --exclude='*.orig' gcc-4.2.2.orig/gcc/postreload.c gcc-4.2.2/gcc/postreload.c
+--- gcc-4.2.2.orig/gcc/postreload.c	2007-09-01 17:28:30.000000000 +0200
++++ gcc-4.2.2/gcc/postreload.c	2008-03-04 10:10:57.000000000 +0100
+@@ -1428,6 +1428,7 @@ static void
+ move2add_note_store (rtx dst, rtx set, void *data ATTRIBUTE_UNUSED)
+ {
+   unsigned int regno = 0;
++  unsigned int nregs = 0;
+   unsigned int i;
+   enum machine_mode mode = GET_MODE (dst);
+ 
+@@ -1437,6 +1438,7 @@ move2add_note_store (rtx dst, rtx set, v
+ 				   GET_MODE (SUBREG_REG (dst)),
+ 				   SUBREG_BYTE (dst),
+ 				   GET_MODE (dst));
++      nregs = subreg_nregs (dst);
+       dst = SUBREG_REG (dst);
+     }
+ 
+@@ -1454,9 +1456,11 @@ move2add_note_store (rtx dst, rtx set, v
+     return;
+ 
+   regno += REGNO (dst);
++  if (!nregs)
++    nregs = hard_regno_nregs[regno][mode];
+ 
+   if (SCALAR_INT_MODE_P (GET_MODE (dst))
+-      && hard_regno_nregs[regno][mode] == 1 && GET_CODE (set) == SET
++      && nregs == 1 && GET_CODE (set) == SET
+       && GET_CODE (SET_DEST (set)) != ZERO_EXTRACT
+       && GET_CODE (SET_DEST (set)) != STRICT_LOW_PART)
+     {
+@@ -1556,7 +1560,7 @@ move2add_note_store (rtx dst, rtx set, v
+     }
+   else
+     {
+-      unsigned int endregno = regno + hard_regno_nregs[regno][mode];
++      unsigned int endregno = regno + nregs;
+ 
+       for (i = regno; i < endregno; i++)
+ 	/* Reset the information about this register.  */
+diff -pur --exclude='*.rej' --exclude='*.orig' gcc-4.2.2.orig/gcc/reload.c gcc-4.2.2/gcc/reload.c
+--- gcc-4.2.2.orig/gcc/reload.c	2007-09-01 17:28:30.000000000 +0200
++++ gcc-4.2.2/gcc/reload.c	2008-03-04 10:14:34.000000000 +0100
+@@ -2418,7 +2418,7 @@ decompose (rtx x)
+ 	return decompose (SUBREG_REG (x));
+       else
+ 	/* A hard reg.  */
+-	val.end = val.start + hard_regno_nregs[val.start][GET_MODE (x)];
++        val.end = val.start + subreg_nregs (x);
+       break;
+ 
+     case SCRATCH:
+@@ -6406,7 +6406,7 @@ refers_to_regno_for_reload_p (unsigned i
+ 	  unsigned int inner_regno = subreg_regno (x);
+ 	  unsigned int inner_endregno
+ 	    = inner_regno + (inner_regno < FIRST_PSEUDO_REGISTER
+-			     ? hard_regno_nregs[inner_regno][GET_MODE (x)] : 1);
++                             ? subreg_nregs (x) : 1);
+ 
+ 	  return endregno > inner_regno && regno < inner_endregno;
+ 	}
+@@ -6504,6 +6504,10 @@ reg_overlap_mentioned_for_reload_p (rtx 
+ 				      GET_MODE (SUBREG_REG (x)),
+ 				      SUBREG_BYTE (x),
+ 				      GET_MODE (x));
++      endregno = regno + (regno < FIRST_PSEUDO_REGISTER
++                         ? subreg_nregs (x) : 1);
++
++      return refers_to_regno_for_reload_p (regno, endregno, in, (rtx*) 0);
+     }
+   else if (REG_P (x))
+     {
+diff -pur --exclude='*.rej' --exclude='*.orig' gcc-4.2.2.orig/gcc/resource.c gcc-4.2.2/gcc/resource.c
+--- gcc-4.2.2.orig/gcc/resource.c	2007-09-01 17:28:30.000000000 +0200
++++ gcc-4.2.2/gcc/resource.c	2008-03-04 11:05:33.000000000 +0100
+@@ -98,11 +98,17 @@ update_live_status (rtx dest, rtx x, voi
+     return;
+ 
+   if (GET_CODE (dest) == SUBREG)
+-    first_regno = subreg_regno (dest);
+-  else
+-    first_regno = REGNO (dest);
++    {
++      first_regno = subreg_regno (dest);
++      last_regno = first_regno + subreg_nregs (dest);
+ 
+-  last_regno = first_regno + hard_regno_nregs[first_regno][GET_MODE (dest)];
++    }
++  else
++    {
++      first_regno = REGNO (dest);
++      last_regno
++       = first_regno + hard_regno_nregs[first_regno][GET_MODE (dest)];
++    }
+ 
+   if (GET_CODE (x) == CLOBBER)
+     for (i = first_regno; i < last_regno; i++)
+@@ -228,8 +234,7 @@ mark_referenced_resources (rtx x, struct
+       else
+ 	{
+ 	  unsigned int regno = subreg_regno (x);
+-	  unsigned int last_regno
+-	    = regno + hard_regno_nregs[regno][GET_MODE (x)];
++          unsigned int last_regno = regno + subreg_nregs (x);
+ 
+ 	  gcc_assert (last_regno <= FIRST_PSEUDO_REGISTER);
+ 	  for (r = regno; r < last_regno; r++)
+@@ -762,8 +767,7 @@ mark_set_resources (rtx x, struct resour
+ 	  else
+ 	    {
+ 	      unsigned int regno = subreg_regno (x);
+-	      unsigned int last_regno
+-		= regno + hard_regno_nregs[regno][GET_MODE (x)];
++              unsigned int last_regno = regno + subreg_nregs (x);
+ 
+ 	      gcc_assert (last_regno <= FIRST_PSEUDO_REGISTER);
+ 	      for (r = regno; r < last_regno; r++)
+diff -pur --exclude='*.rej' --exclude='*.orig' gcc-4.2.2.orig/gcc/rtlanal.c gcc-4.2.2/gcc/rtlanal.c
+--- gcc-4.2.2.orig/gcc/rtlanal.c	2008-03-03 17:32:29.000000000 +0100
++++ gcc-4.2.2/gcc/rtlanal.c	2008-03-04 11:39:23.000000000 +0100
+@@ -37,6 +37,18 @@ along with GCC; see the file COPYING3.  
+ #include "regs.h"
+ #include "function.h"
+ 
++/* Information about a subreg of a hard register.  */
++struct subreg_info
++{
++  /* Offset of first hard register involved in the subreg.  */
++  int offset;
++  /* Number of hard registers involved in the subreg.  */
++  int nregs;
++  /* Whether this subreg can be represented as a hard reg with the new
++     mode.  */
++  bool representable_p;
++};
++
+ /* Forward declarations */
+ static void set_of_1 (rtx, rtx, void *);
+ static bool covers_regno_p (rtx, unsigned int);
+@@ -44,6 +56,9 @@ static bool covers_regno_no_parallel_p (
+ static int rtx_referenced_p_1 (rtx *, void *);
+ static int computed_jump_p_1 (rtx);
+ static void parms_set (rtx, rtx, void *);
++static void subreg_get_info (unsigned int, enum machine_mode,
++                            unsigned int, enum machine_mode,
++                            struct subreg_info *);
+ 
+ static unsigned HOST_WIDE_INT cached_nonzero_bits (rtx, enum machine_mode,
+                                                    rtx, enum machine_mode,
+@@ -1169,7 +1184,7 @@ refers_to_regno_p (unsigned int regno, u
+ 	  unsigned int inner_regno = subreg_regno (x);
+ 	  unsigned int inner_endregno
+ 	    = inner_regno + (inner_regno < FIRST_PSEUDO_REGISTER
+-			     ? hard_regno_nregs[inner_regno][GET_MODE (x)] : 1);
++                            ? subreg_nregs (x) : 1);
+ 
+ 	  return endregno > inner_regno && regno < inner_endregno;
+ 	}
+@@ -1259,13 +1274,16 @@ reg_overlap_mentioned_p (rtx x, rtx in)
+       regno = REGNO (SUBREG_REG (x));
+       if (regno < FIRST_PSEUDO_REGISTER)
+ 	regno = subreg_regno (x);
++      endregno = regno + (regno < FIRST_PSEUDO_REGISTER
++                         ? subreg_nregs (x) : 1);
+       goto do_reg;
+ 
+     case REG:
+       regno = REGNO (x);
+-    do_reg:
++
+       endregno = regno + (regno < FIRST_PSEUDO_REGISTER
+ 			  ? hard_regno_nregs[regno][GET_MODE (x)] : 1);
++    do_reg:
+       return refers_to_regno_p (regno, endregno, in, (rtx*) 0);
+ 
+     case MEM:
+@@ -2909,69 +2927,27 @@ subreg_lsb (rtx x)
+ 		       SUBREG_BYTE (x));
+ }
+ 
+-/* This function returns the regno offset of a subreg expression.
++/* Fill in information about a subreg of a hard register.
+    xregno - A regno of an inner hard subreg_reg (or what will become one).
+    xmode  - The mode of xregno.
+    offset - The byte offset.
+    ymode  - The mode of a top level SUBREG (or what may become one).
+-   RETURN - The regno offset which would be used.  */
+-unsigned int
+-subreg_regno_offset (unsigned int xregno, enum machine_mode xmode,
+-		     unsigned int offset, enum machine_mode ymode)
+-{
+-  int nregs_xmode, nregs_ymode;
+-  int mode_multiple, nregs_multiple;
+-  int y_offset;
+-
+-  gcc_assert (xregno < FIRST_PSEUDO_REGISTER);
+-
+-  /* Adjust nregs_xmode to allow for 'holes'.  */
+-  if (HARD_REGNO_NREGS_HAS_PADDING (xregno, xmode))
+-    nregs_xmode = HARD_REGNO_NREGS_WITH_PADDING (xregno, xmode);
+-  else
+-    nregs_xmode = hard_regno_nregs[xregno][xmode];
+-    
+-  nregs_ymode = hard_regno_nregs[xregno][ymode];
+-
+-  /* If this is a big endian paradoxical subreg, which uses more actual
+-     hard registers than the original register, we must return a negative
+-     offset so that we find the proper highpart of the register.  */
+-  if (offset == 0
+-      && nregs_ymode > nregs_xmode
+-      && (GET_MODE_SIZE (ymode) > UNITS_PER_WORD
+-	  ? WORDS_BIG_ENDIAN : BYTES_BIG_ENDIAN))
+-    return nregs_xmode - nregs_ymode;
+-
+-  if (offset == 0 || nregs_xmode == nregs_ymode)
+-    return 0;
+-
+-  /* Size of ymode must not be greater than the size of xmode.  */
+-  mode_multiple = GET_MODE_SIZE (xmode) / GET_MODE_SIZE (ymode);
+-  gcc_assert (mode_multiple != 0);
+-
+-  y_offset = offset / GET_MODE_SIZE (ymode);
+-  nregs_multiple =  nregs_xmode / nregs_ymode;
+-  return (y_offset / (mode_multiple / nregs_multiple)) * nregs_ymode;
+-}
+-
+-/* This function returns true when the offset is representable via
+-   subreg_offset in the given regno.
+-   xregno - A regno of an inner hard subreg_reg (or what will become one).
+-   xmode  - The mode of xregno.
+-   offset - The byte offset.
+-   ymode  - The mode of a top level SUBREG (or what may become one).
+-   RETURN - Whether the offset is representable.  */
+-bool
+-subreg_offset_representable_p (unsigned int xregno, enum machine_mode xmode,
+-			       unsigned int offset, enum machine_mode ymode)
++   info   - Pointer to structure to fill in.  */
++static void
++subreg_get_info (unsigned int xregno, enum machine_mode xmode,
++                unsigned int offset, enum machine_mode ymode,
++                struct subreg_info *info)
+ {
+   int nregs_xmode, nregs_ymode;
+   int mode_multiple, nregs_multiple;
+-  int y_offset;
++  int offset_adj, y_offset, y_offset_adj;
+   int regsize_xmode, regsize_ymode;
++  bool rknown;
+ 
+   gcc_assert (xregno < FIRST_PSEUDO_REGISTER);
+ 
++  rknown = false;
++
+   /* If there are holes in a non-scalar mode in registers, we expect
+      that it is made up of its units concatenated together.  */
+   if (HARD_REGNO_NREGS_HAS_PADDING (xregno, xmode))
+@@ -3004,7 +2980,10 @@ subreg_offset_representable_p (unsigned 
+ 	  && (offset / GET_MODE_SIZE (xmode_unit)
+ 	      != ((offset + GET_MODE_SIZE (ymode) - 1)
+ 		  / GET_MODE_SIZE (xmode_unit))))
+-	return false;
++       {
++         info->representable_p = false;
++         rknown = true;
++       }
+     }
+   else
+     nregs_xmode = hard_regno_nregs[xregno][xmode];
+@@ -3012,24 +2991,64 @@ subreg_offset_representable_p (unsigned 
+   nregs_ymode = hard_regno_nregs[xregno][ymode];
+ 
+   /* Paradoxical subregs are otherwise valid.  */
+-  if (offset == 0
+-      && nregs_ymode > nregs_xmode
+-      && (GET_MODE_SIZE (ymode) > UNITS_PER_WORD
+-	  ? WORDS_BIG_ENDIAN : BYTES_BIG_ENDIAN))
+-    return true;
++  if (!rknown
++      && offset == 0
++      && GET_MODE_SIZE (ymode) > GET_MODE_SIZE (xmode))
++    {
++      info->representable_p = true;
++      /* If this is a big endian paradoxical subreg, which uses more
++        actual hard registers than the original register, we must
++        return a negative offset so that we find the proper highpart
++        of the register.  */
++      if (GET_MODE_SIZE (ymode) > UNITS_PER_WORD
++         ? WORDS_BIG_ENDIAN : BYTES_BIG_ENDIAN)
++       info->offset = nregs_xmode - nregs_ymode;
++      else
++       info->offset = 0;
++      info->nregs = nregs_ymode;
++      return;
++    }
+ 
+   /* If registers store different numbers of bits in the different
+      modes, we cannot generally form this subreg.  */
+-  regsize_xmode = GET_MODE_SIZE (xmode) / nregs_xmode;
+-  regsize_ymode = GET_MODE_SIZE (ymode) / nregs_ymode;
+-  if (regsize_xmode > regsize_ymode && nregs_ymode > 1)
+-    return false;
+-  if (regsize_ymode > regsize_xmode && nregs_xmode > 1)
+-    return false;
++  if (!HARD_REGNO_NREGS_HAS_PADDING (xregno, xmode)
++      && !HARD_REGNO_NREGS_HAS_PADDING (xregno, ymode)
++      && (GET_MODE_SIZE (xmode) % nregs_xmode) == 0
++      && (GET_MODE_SIZE (ymode) % nregs_ymode) == 0)
++    {
++      regsize_xmode = GET_MODE_SIZE (xmode) / nregs_xmode;
++      regsize_ymode = GET_MODE_SIZE (ymode) / nregs_ymode;
++      if (!rknown && regsize_xmode > regsize_ymode && nregs_ymode > 1)
++       {
++         info->representable_p = false;
++         info->nregs
++           = (GET_MODE_SIZE (ymode) + regsize_xmode - 1) / regsize_xmode;
++         info->offset = offset / regsize_xmode;
++         return;
++       }
++      if (!rknown && regsize_ymode > regsize_xmode && nregs_xmode > 1)
++       {
++         info->representable_p = false;
++         info->nregs
++           = (GET_MODE_SIZE (ymode) + regsize_xmode - 1) / regsize_xmode;
++         info->offset = offset / regsize_xmode;
++         return;
++       }
++    }
+ 
+   /* Lowpart subregs are otherwise valid.  */
+-  if (offset == subreg_lowpart_offset (ymode, xmode))
+-    return true;
++  if (!rknown && offset == subreg_lowpart_offset (ymode, xmode))
++    {
++      info->representable_p = true;
++      rknown = true;
++
++      if (offset == 0 || nregs_xmode == nregs_ymode)
++       {
++         info->offset = 0;
++         info->nregs = nregs_ymode;
++         return;
++       }
++    }
+ 
+   /* This should always pass, otherwise we don't know how to verify
+      the constraint.  These conditions may be relaxed but
+@@ -3040,22 +3059,62 @@ subreg_offset_representable_p (unsigned 
+   /* The XMODE value can be seen as a vector of NREGS_XMODE
+      values.  The subreg must represent a lowpart of given field.
+      Compute what field it is.  */
+-  offset -= subreg_lowpart_offset (ymode,
+-				   mode_for_size (GET_MODE_BITSIZE (xmode)
+-						  / nregs_xmode,
+-						  MODE_INT, 0));
++  offset_adj = offset;
++  offset_adj -= subreg_lowpart_offset (ymode,
++                                      mode_for_size (GET_MODE_BITSIZE (xmode)
++                                                     / nregs_xmode,
++                                                     MODE_INT, 0));
+ 
+   /* Size of ymode must not be greater than the size of xmode.  */
+   mode_multiple = GET_MODE_SIZE (xmode) / GET_MODE_SIZE (ymode);
+   gcc_assert (mode_multiple != 0);
+ 
+   y_offset = offset / GET_MODE_SIZE (ymode);
+-  nregs_multiple =  nregs_xmode / nregs_ymode;
++  y_offset_adj = offset_adj / GET_MODE_SIZE (ymode);
++  nregs_multiple = nregs_xmode / nregs_ymode;
+ 
+-  gcc_assert ((offset % GET_MODE_SIZE (ymode)) == 0);
++  gcc_assert ((offset_adj % GET_MODE_SIZE (ymode)) == 0);
+   gcc_assert ((mode_multiple % nregs_multiple) == 0);
+ 
+-  return (!(y_offset % (mode_multiple / nregs_multiple)));
++  if (!rknown)
++    {
++      info->representable_p = (!(y_offset_adj % (mode_multiple / nregs_multiple)));
++      rknown = true;
++    }
++  info->offset = (y_offset / (mode_multiple / nregs_multiple)) * nregs_ymode;
++  info->nregs = nregs_ymode;
++
++}
++
++/* This function returns the regno offset of a subreg expression.
++   xregno - A regno of an inner hard subreg_reg (or what will become one).
++   xmode  - The mode of xregno.
++   offset - The byte offset.
++   ymode  - The mode of a top level SUBREG (or what may become one).
++   RETURN - The regno offset which would be used.  */
++unsigned int
++subreg_regno_offset (unsigned int xregno, enum machine_mode xmode,
++                    unsigned int offset, enum machine_mode ymode)
++{
++  struct subreg_info info;
++  subreg_get_info (xregno, xmode, offset, ymode, &info);
++  return info.offset;
++}
++
++/* This function returns true when the offset is representable via
++   subreg_offset in the given regno.
++   xregno - A regno of an inner hard subreg_reg (or what will become one).
++   xmode  - The mode of xregno.
++   offset - The byte offset.
++   ymode  - The mode of a top level SUBREG (or what may become one).
++   RETURN - Whether the offset is representable.  */
++bool
++subreg_offset_representable_p (unsigned int xregno, enum machine_mode xmode,
++                              unsigned int offset, enum machine_mode ymode)
++{
++  struct subreg_info info;
++  subreg_get_info (xregno, xmode, offset, ymode, &info);
++  return info.representable_p;
+ }
+ 
+ /* Return the final regno that a subreg expression refers to.  */
+@@ -3073,6 +3132,21 @@ subreg_regno (rtx x)
+   return ret;
+ 
+ }
++
++/* Return the number of registers that a subreg expression refers
++   to.  */
++unsigned int
++subreg_nregs (rtx x)
++{
++  struct subreg_info info;
++  rtx subreg = SUBREG_REG (x);
++  int regno = REGNO (subreg);
++
++  subreg_get_info (regno, GET_MODE (subreg), SUBREG_BYTE (x), GET_MODE (x),
++                  &info);
++  return info.nregs;
++}
++
+ struct parms_set_data
+ {
+   int nregs;
+diff -pur --exclude='*.rej' --exclude='*.orig' gcc-4.2.2.orig/gcc/rtl.h gcc-4.2.2/gcc/rtl.h
+--- gcc-4.2.2.orig/gcc/rtl.h	2007-09-01 17:28:30.000000000 +0200
++++ gcc-4.2.2/gcc/rtl.h	2008-03-04 10:09:23.000000000 +0100
+@@ -1040,6 +1040,7 @@ extern unsigned int subreg_regno_offset	
+ extern bool subreg_offset_representable_p (unsigned int, enum machine_mode,
+ 					   unsigned int, enum machine_mode);
+ extern unsigned int subreg_regno (rtx);
++extern unsigned int subreg_nregs (rtx);
+ extern unsigned HOST_WIDE_INT nonzero_bits (rtx, enum machine_mode);
+ extern unsigned int num_sign_bit_copies (rtx, enum machine_mode);
+ extern bool constant_pool_constant_p (rtx);
+--- /dev/null	2008-02-26 19:41:46.842613679 +0100
++++ gcc-4.2.2/gcc/testsuite/gcc.c-torture/compile/pr30311.c	2008-03-04 11:39:23.000000000 +0100
+@@ -0,0 +1,16 @@
++/* ICE in subreg_get_info: bug 30311.  */
++/* { dg-do compile { target i?86-*-* x86_64-*-* } } */
++inline double bar(double x)
++{
++  long double d;
++  __asm__ ("" : "=t" (d) : "0" (x));
++  return d;
++}
++
++double foo(double x)
++{
++  if (x)
++    return bar(x);
++  else
++    return bar(x);
++}

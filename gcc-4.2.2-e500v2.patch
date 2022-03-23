@@ -1,0 +1,42 @@
+--- gcc-4.2.2/gcc/cross_update_cpu.c.orig	2008-02-26 15:05:45.000000000 +0100
++++ gcc-4.2.2/gcc/cross_update_cpu.c	2008-02-26 15:14:23.000000000 +0100
+@@ -18,7 +18,8 @@ struct target_cpu ppc_cpu_tbl[] = {
+   {"82xx", "603" },
+   {"8xx",  "860" },
+   {"6xx",  "603" },
+-  {"85xx", "8540" }
++  {"85xx", "8540" },
++  {"85xxDP", "8540" }
+ };
+ 
+ struct target_cpu arm_cpu_tbl[] = {
+@@ -40,6 +41,7 @@ void cross_update_cpu(argc, argv)
+   char *p;
+   int len;
+   int soft_float = 0;
++  int dp = 0;
+ 
+   p = basename(family_cpu);
+   len = strlen(p);
+@@ -102,15 +104,19 @@ void cross_update_cpu(argc, argv)
+             break;
+           }
+         }
++        if (strstr(cpu, "85xxDP")) {
++          dp = 1;
++        }
+         if (cpu_id && !strcmp(cpu_id, "8540") && !soft_float) {
+           newargv[0] = (*argv)[0];
+           newargv[1] = xmalloc(strlen(cpu_id) + 8);
+-          newargv[2] = xmalloc(strlen("-mfloat-gprs=yes") + 2);
++          newargv[2] = dp ? xmalloc(strlen("-mfloat-gprs=double") + 2) :
++            xmalloc(strlen("-mfloat-gprs=yes") + 2);
+           newargv[3] = xmalloc(strlen("-mspe=yes") + 2);
+           newargv[4] = xmalloc(strlen("-mabi=spe") + 2);
+           strcpy(newargv[1], "-mcpu=");
+           strcat(newargv[1], cpu_id);
+-          strcpy(newargv[2], "-mfloat-gprs=yes");
++          strcpy(newargv[2], dp ? "-mfloat-gprs=double" : "-mfloat-gprs=yes");
+           strcpy(newargv[3], "-mspe=yes");
+           strcpy(newargv[4], "-mabi=spe");
+           for (i = 5; i < *argc + 4; i++)

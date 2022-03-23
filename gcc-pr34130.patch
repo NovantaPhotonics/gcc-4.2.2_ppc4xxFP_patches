@@ -1,0 +1,27 @@
+--- gcc-4.2.2/gcc/fold-const.c.orig	2007-09-01 17:28:30.000000000 +0200
++++ gcc-4.2.2/gcc/fold-const.c	2007-11-27 10:44:26.000000000 +0100
+@@ -5660,6 +5660,9 @@ extract_muldiv_1 (tree t, tree c, enum t
+             }
+           break;
+         }
++      /* If the constant is negative, we cannot simplify this.  */
++      if (tree_int_cst_sgn (c) == -1)
++        break;
+       /* FALLTHROUGH */
+     case NEGATE_EXPR:
+       if ((t1 = extract_muldiv (op0, c, code, wide_type, strict_overflow_p))
+--- /dev/null	2007-11-23 05:20:17.166048278 +0100
++++ gcc-4.2.2/gcc/testsuite/gcc.c-torture/pr34130.c	2007-11-27 10:46:46.000000000 +0100
+@@ -0,0 +1,12 @@
++extern void abort (void);
++int foo (int i)
++{
++	return -2 * __builtin_abs(i - 2);
++}
++int main()
++{
++	if (foo(1) != -2
++		|| foo(3) != -2)
++		abort ();
++	return 0;
++}

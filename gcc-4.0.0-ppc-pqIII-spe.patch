@@ -1,0 +1,86 @@
+--- gcc-3.4.3/gcc/cross_update_cpu.c.orig	Thu May  5 18:07:37 2005
++++ gcc-3.4.3/gcc/cross_update_cpu.c	Thu May  5 18:09:33 2005
+@@ -39,6 +39,7 @@ void cross_update_cpu(argc, argv)
+   char *family_cpu = strdup(TARGET_FAMILY_CPU);
+   char *p;
+   int len;
++  int soft_float = 0;
+ 
+   p = basename(family_cpu);
+   len = strlen(p);
+@@ -82,7 +83,7 @@ void cross_update_cpu(argc, argv)
+     if (i == *argc)
+     {
+       /* The user has not specified cpu option - add it */
+-      char **newargv = xmalloc((*argc + 2)*sizeof(char *));
++      char **newargv = xmalloc((*argc + 4)*sizeof(char *));
+       char *cpu_id = NULL;
+ 
+       if (!strncasecmp(p, "ppc_", 4)) {
+@@ -94,6 +95,30 @@ void cross_update_cpu(argc, argv)
+             break;
+           }
+         }
++        for (i = 0; i < *argc; i++)
++        {
++          if (!strncmp((*argv)[i], "-msoft-float", 12)) {
++            soft_float = 1;
++            break;
++          }
++        }
++        if (cpu_id && !strcmp(cpu_id, "8540") && !soft_float) {
++          newargv[0] = (*argv)[0];
++          newargv[1] = xmalloc(strlen(cpu_id) + 8);
++          newargv[2] = xmalloc(strlen("-mfloat-gprs=yes") + 2);
++          newargv[3] = xmalloc(strlen("-mspe=yes") + 2);
++          newargv[4] = xmalloc(strlen("-mabi=spe") + 2);
++          strcpy(newargv[1], "-mcpu=");
++          strcat(newargv[1], cpu_id);
++          strcpy(newargv[2], "-mfloat-gprs=yes");
++          strcpy(newargv[3], "-mspe=yes");
++          strcpy(newargv[4], "-mabi=spe");
++          for (i = 5; i < *argc + 4; i++)
++            newargv[i] = (*argv)[i-4];
++          *argv = newargv;
++          (*argc) += 4;
++          cpu_id = NULL;
++        }
+       }
+       else if (!strncasecmp(p, "arm", 3)) { 
+         cpu = strchr(p, '_');
+diff -pur gcc-4.0.0.orig/gcc/config/rs6000/rs6000.h gcc-4.0.0/gcc/config/rs6000/rs6000.h
+--- gcc-4.0.0.orig/gcc/config/rs6000/rs6000.h	2005-03-01 07:26:20.000000000 +0100
++++ gcc-4.0.0/gcc/config/rs6000/rs6000.h	2005-07-16 18:42:20.771769974 +0200
+@@ -100,9 +100,8 @@
+ %{mcpu=860: -mppc} \
+ %{mcpu=970: -mpower4 -maltivec} \
+ %{mcpu=G5: -mpower4 -maltivec} \
+-%{mcpu=8540: -me500} \
+-%{maltivec: -maltivec} \
+--many"
++%{mcpu=8540: -me500 -mspe} \
++%{maltivec: -maltivec}"
+ 
+ #define CPP_DEFAULT_SPEC ""
+ 
+@@ -563,13 +562,13 @@ extern const char *rs6000_warn_altivec_l
+ #define TARGET_ALTIVEC_ABI rs6000_altivec_abi
+ #define TARGET_ALTIVEC_VRSAVE rs6000_altivec_vrsave
+ 
+-#define TARGET_SPE_ABI 0
+-#define TARGET_SPE 0
+-#define TARGET_E500 0
+-#define TARGET_ISEL 0
+-#define TARGET_FPRS 1
+-#define TARGET_E500_SINGLE 0
+-#define TARGET_E500_DOUBLE 0
++#define TARGET_SPE_ABI rs6000_spe_abi
++#define TARGET_SPE rs6000_spe
++#define TARGET_E500 (rs6000_cpu == PROCESSOR_PPC8540)
++#define TARGET_ISEL rs6000_isel
++#define TARGET_FPRS (rs6000_float_gprs == 0)
++#define TARGET_E500_SINGLE (TARGET_HARD_FLOAT && rs6000_float_gprs == 1)
++#define TARGET_E500_DOUBLE (TARGET_HARD_FLOAT && rs6000_float_gprs == 2)
+ 
+ /* Sometimes certain combinations of command options do not make sense
+    on a particular target machine.  You can define a macro

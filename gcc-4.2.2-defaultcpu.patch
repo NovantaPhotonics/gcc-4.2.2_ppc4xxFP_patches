@@ -1,0 +1,212 @@
+--- gcc-4.2.0/gcc/config/mips/linux.h.orig	2006-12-17 14:53:07.000000000 +0100
++++ gcc-4.2.0/gcc/config/mips/linux.h	2007-04-16 11:49:03.000000000 +0200
+@@ -90,7 +90,9 @@ Boston, MA 02110-1301, USA.  */
+   } while (0)
+ 
+ #undef SUBTARGET_CPP_SPEC
+-#define SUBTARGET_CPP_SPEC "%{posix:-D_POSIX_SOURCE} %{pthread:-D_REENTRANT}"
++#define SUBTARGET_CPP_SPEC "%{mcpu=4kc:-DR4KC -D_R4KC -D__R4KC} \
++  %{!mcpu=4kc:-DR3000 -D_R3000 -D__R3000} \
++  %{posix:-D_POSIX_SOURCE} %{pthread:-D_REENTRANT}"
+ 
+ /* A standard GNU/Linux mapping.  On most targets, it is included in
+    CC1_SPEC itself by config/linux.h, but mips.h overrides CC1_SPEC
+--- gcc-4.2.0/gcc/gcc.c.orig	2007-03-05 21:37:05.000000000 +0100
++++ gcc-4.2.0/gcc/gcc.c	2007-04-16 11:32:38.000000000 +0200
+@@ -350,6 +350,8 @@ static void init_gcc_specs (struct obsta
+ static const char *convert_filename (const char *, int, int);
+ #endif
+ 
++extern void cross_update_cpu(int *, char **);
++
+ static const char *if_exists_spec_function (int, const char **);
+ static const char *if_exists_else_spec_function (int, const char **);
+ static const char *replace_outfile_spec_function (int, const char **);
+@@ -6186,6 +6188,8 @@ main (int argc, char **argv)
+   putenv (INIT_ENVIRONMENT);
+ #endif
+ 
++  cross_update_cpu(&argc, &argv);
++
+   /* Make a table of what switches there are (switches, n_switches).
+      Make a table of specified input files (infiles, n_infiles).
+      Decode switches that are handled locally.  */
+--- gcc-4.2.0/gcc/Makefile.in.orig	2007-04-16 10:53:01.000000000 +0200
++++ gcc-4.2.0/gcc/Makefile.in	2007-04-16 11:52:17.000000000 +0200
+@@ -1321,6 +1321,11 @@ libbackend.a: $(OBJS@onestep@)
+    version.o $(LIBDEPS) $(EXTRA_GCC_OBJS)
+ 	$(CC) $(ALL_CFLAGS) $(LDFLAGS) -o $@ $(GCC_OBJS) cppspec.o \
+ 	  intl.o prefix.o version.o $(EXTRA_GCC_OBJS) $(LIBS)
++
++cross_update_cpu.o: cross_update_cpu.c
++	$(CC) $(ALL_CFLAGS) $(ALL_CPPFLAGS) $(INCLUDES) \
++	-DTARGET_FAMILY_CPU="\"$(CROSS_COMPILE)\"" \
++	-c $(srcdir)/cross_update_cpu.c $(OUTPUT_OPTION)
+ 
+ # Create links to binutils, especially for in-tree builds, to make -B.
+ # use them.  We need hard links so that directories can be shuffled
+--- /dev/null	Thu Apr 11 16:25:15 2002
++++ gcc-3.4.3/gcc/cross_update_cpu.c	Thu May  5 16:55:40 2005
+@@ -0,0 +1,151 @@
++#include <stdio.h>
++#include <string.h>
++
++/* The following structure sets matching between CROSS_COMPILE macro variable
++ * and --mcpu=<cpu> flag values
++ */
++
++static struct target_cpu {
++  char *target_arch;      /* cpu specification in CROSS_COMPILE */
++  char *cpu_id;           /* cpu specification in the mcpu flag */
++}; 
++
++struct target_cpu ppc_cpu_tbl[] = {
++  {"4xx",  "403" },
++  {"4xxFP","405fp"},
++  {"74xx", "7400"},
++  {"7xx",  "750" },
++  {"82xx", "603" },
++  {"8xx",  "860" },
++  {"6xx",  "603" },
++  {"85xx", "8540" }
++};
++
++struct target_cpu arm_cpu_tbl[] = {
++  {"920TDI", "arm9"}
++};
++
++struct target_cpu mips_cpu_tbl[] = {
++  {"4KC", "4kc"}
++};
++
++void cross_update_cpu(argc, argv)
++  int *argc;
++  char ***argv;
++{
++#ifdef TARGET_FAMILY_CPU
++  int i;
++  char *cpu;
++  char *family_cpu = strdup(TARGET_FAMILY_CPU);
++  char *p;
++  int len;
++
++  p = basename(family_cpu);
++  len = strlen(p);
++  if (*(p + len - 1) == '-') 
++      *(p + len - 1) = '\0';
++
++  if (!strncasecmp(p, "ppc_", 4) || 
++      !strncasecmp(p, "arm", 3) ||
++      !strncasecmp(p, "mips_", 5))
++  {
++    /* Figure out the endianess */
++    if (!strcmp(family_cpu + strlen(family_cpu) - 2, "le")) {
++      char **newargv;
++      /* Cut off the endianess suffix */
++      *(family_cpu + strlen(family_cpu) - 2) = '\0';
++
++      /* Add option to the command line, if not given */
++      for (i = 0; i < *argc; i++)
++      {
++        if (!strncmp((*argv)[i], "-EL", 3) || !strncmp((*argv)[i], "-EB", 3))
++          break;
++      }
++      if (i == *argc) {
++        newargv = xmalloc((*argc + 1)*sizeof(char *));
++        newargv[0] = (*argv)[0];
++        newargv[1] = xmalloc(strlen("-EL") + 1);
++        strcpy(newargv[1], "-EL");
++        for (i = 2; i < *argc + 1; i++)
++          newargv[i] = (*argv)[i-1];
++        *argv = newargv;
++        (*argc)++;
++      }
++    }
++    for (i = 0; i < *argc; i++)
++    {
++      if (!strncmp((*argv)[i], "-mcpu=", 6) ||
++        !strncmp((*argv)[i], "-march=", 7) ||
++        !strncmp((*argv)[i], "-mips", 5))
++        break;
++    }
++    if (i == *argc)
++    {
++      /* The user has not specified cpu option - add it */
++      char **newargv = xmalloc((*argc + 2)*sizeof(char *));
++      char *cpu_id = NULL;
++
++      if (!strncasecmp(p, "ppc_", 4)) {
++        cpu = p + 4;
++        for (i = 0; i < sizeof(ppc_cpu_tbl)/sizeof(ppc_cpu_tbl[0]); i++)
++        {
++          if (! strcmp(ppc_cpu_tbl[i].target_arch, cpu)) {
++            cpu_id = ppc_cpu_tbl[i].cpu_id;
++            break;
++          }
++        }
++      }
++      else if (!strncasecmp(p, "arm", 3)) { 
++        cpu = strchr(p, '_');
++        if (cpu) {
++          cpu++;
++          for (i = 0; i < sizeof(arm_cpu_tbl)/sizeof(arm_cpu_tbl[0]); i++)
++          {
++            if (! strcmp(arm_cpu_tbl[i].target_arch, cpu)) {
++              cpu_id = arm_cpu_tbl[i].cpu_id;
++              break;
++            }
++          }
++        } else {
++          cpu_id = arm_cpu_tbl[0].cpu_id;
++        }
++      }
++      else if (!strncasecmp(p, "mips_", 5)) {
++        cpu = p + 5;
++        for (i = 0; i < sizeof(mips_cpu_tbl)/sizeof(mips_cpu_tbl[0]); i++)
++        {
++          if (! strcmp(mips_cpu_tbl[i].target_arch, cpu)) {
++            cpu_id = mips_cpu_tbl[i].cpu_id;
++            newargv[0] = (*argv)[0];
++            newargv[1] = xmalloc(strlen(cpu_id) + 8);
++            newargv[2] = xmalloc(strlen(cpu_id) + 8);
++            strcpy(newargv[1], "-march=");
++            strcat(newargv[1], cpu_id);
++            strcpy(newargv[2], "-mtune=");
++            strcat(newargv[2], cpu_id);
++            for (i = 3; i < *argc + 2; i++)
++              newargv[i] = (*argv)[i-2];
++            *argv = newargv;
++            (*argc) += 2;
++            cpu_id = NULL; /* all done */
++            break;
++          }
++        }
++      }
++      if (cpu_id)
++      {
++        newargv[0] = (*argv)[0];
++        newargv[1] = xmalloc(strlen(cpu_id) + 7);
++        strcpy(newargv[1], "-mcpu=");
++        strcat(newargv[1], cpu_id);
++        for (i = 2; i < *argc + 1; i++)
++          newargv[i] = (*argv)[i-1];
++        *argv = newargv;
++        (*argc)++;
++      }
++    }
++  }
++  free(family_cpu);
++#endif
++}
++
+--- gcc-4.2.1/gcc/Makefile.in.orig	2007-10-02 14:34:05.000000000 +0200
++++ gcc-4.2.1/gcc/Makefile.in	2007-10-02 14:34:21.000000000 +0200
+@@ -961,7 +961,7 @@ C_TARGET_OBJS=@c_target_objs@
+ CXX_TARGET_OBJS=@cxx_target_objs@
+ 
+ # Object files for gcc driver.
+-GCC_OBJS = gcc.o opts-common.o gcc-options.o
++GCC_OBJS = gcc.o opts-common.o gcc-options.o cross_update_cpu.o
+ 
+ # Language-specific object files for C and Objective C.
+ C_AND_OBJC_OBJS = attribs.o c-errors.o c-lex.o c-pragma.o c-decl.o c-typeck.o \

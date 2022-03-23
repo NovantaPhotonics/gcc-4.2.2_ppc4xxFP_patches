@@ -1,0 +1,122 @@
+diff -pur gcc-4.0.0/gcc/config.orig/arm/linux-elf.h gcc-4.0.0/gcc/config/arm/linux-elf.h
+--- gcc-4.0.0/gcc/config.orig/arm/linux-elf.h	2006-08-03 14:03:09.000000000 +0200
++++ gcc-4.0.0/gcc/config/arm/linux-elf.h	2006-08-03 13:58:38.000000000 +0200
+@@ -96,6 +96,18 @@
+   "%{!shared:crtend.o%s} %{shared:crtendS.o%s} crtn.o%s"
+ 
+ #undef  LINK_SPEC
++#ifdef USE_UCLIBC
++#define LINK_SPEC "%{h*} %{version:-v} \
++   %{b} %{Wl,*:%*} \
++   %{static:-Bstatic} \
++   %{shared:-shared} \
++   %{symbolic:-Bsymbolic} \
++   %{rdynamic:-export-dynamic} \
++   %{!dynamic-linker:-dynamic-linker /lib/ld-uClibc.so.0} \
++   -X \
++   %{mbig-endian:-EB} %{mlittle-endian:-EL}" \
++   SUBTARGET_EXTRA_LINK_SPEC
++#else
+ #define LINK_SPEC "%{h*} %{version:-v} \
+    %{b} %{Wl,*:%*} \
+    %{static:-Bstatic} \
+@@ -106,6 +118,7 @@
+    -X \
+    %{mbig-endian:-EB} %{mlittle-endian:-EL}" \
+    SUBTARGET_EXTRA_LINK_SPEC
++#endif
+ 
+ #define TARGET_OS_CPP_BUILTINS()		\
+   do						\
+diff -pur gcc-4.0.0/gcc/config.orig/t-linux gcc-4.0.0/gcc/config/t-linux
+--- gcc-4.0.0/gcc/config.orig/t-linux	2006-08-03 14:02:33.000000000 +0200
++++ gcc-4.0.0/gcc/config/t-linux	2006-08-03 13:56:26.000000000 +0200
+@@ -1,3 +1,5 @@
++T_CFLAGS = -DUSE_UCLIBC
++
+ # Compile crtbeginS.o and crtendS.o with pic.
+ CRTSTUFF_T_CFLAGS_S = $(CRTSTUFF_T_CFLAGS) -fPIC
+ # Compile libgcc2.a with pic.
+@@ -8,6 +10,6 @@ TARGET_LIBGCC2_CFLAGS = -fPIC
+ SHLIB_MAPFILES += $(srcdir)/config/libgcc-glibc.ver
+ 
+ # Use unwind-dw2-fde-glibc
+-LIB2ADDEH = $(srcdir)/unwind-dw2.c $(srcdir)/unwind-dw2-fde-glibc.c \
++LIB2ADDEH = $(srcdir)/unwind-dw2.c $(srcdir)/unwind-dw2-fde.c \
+   $(srcdir)/unwind-sjlj.c $(srcdir)/gthr-gnat.c $(srcdir)/unwind-c.c
+-LIB2ADDEHDEP = unwind.inc unwind-dw2-fde.h unwind-dw2-fde.c
++LIB2ADDEHDEP = unwind.inc unwind-dw2-fde.h
+diff -urN gcc-4.0.0-dist/gcc/config/mips/linux.h gcc-4.0.0/gcc/config/mips/linux.h
+--- gcc-4.0.0-dist/gcc/config/mips/linux.h	2005-01-25 20:04:46.000000000 -0600
++++ gcc-4.0.0/gcc/config/mips/linux.h	2005-04-28 20:30:00.000000000 -0500
+@@ -108,6 +108,17 @@
+ 
+ /* Borrowed from sparc/linux.h */
+ #undef LINK_SPEC
++#ifdef USE_UCLIBC
++#define LINK_SPEC \
++ "%(endian_spec) \
++  %{shared:-shared} \
++  %{!shared: \
++    %{!ibcs: \
++      %{!static: \
++        %{rdynamic:-export-dynamic} \
++        %{!dynamic-linker:-dynamic-linker /lib/ld-uClibc.so.0}} \
++        %{static:-static}}}"
++#else
+ #define LINK_SPEC \
+  "%(endian_spec) \
+   %{shared:-shared} \
+@@ -117,6 +128,7 @@
+         %{rdynamic:-export-dynamic} \
+         %{!dynamic-linker:-dynamic-linker /lib/ld.so.1}} \
+         %{static:-static}}}"
++#endif
+ 
+ #undef SUBTARGET_ASM_SPEC
+ #define SUBTARGET_ASM_SPEC "%{mabi=64: -64} %{!mno-abicalls:-KPIC}"
+diff -urN gcc-4.0.0-dist/gcc/config/rs6000/linux.h gcc-4.0.0/gcc/config/rs6000/linux.h
+--- gcc-4.0.0-dist/gcc/config/rs6000/linux.h	2004-12-01 20:21:28.000000000 -0600
++++ gcc-4.0.0/gcc/config/rs6000/linux.h	2005-04-28 20:30:00.000000000 -0500
+@@ -69,7 +69,11 @@
+ #define LINK_START_DEFAULT_SPEC "%(link_start_linux)"
+ 
+ #undef	LINK_OS_DEFAULT_SPEC
++#ifdef USE_UCLIBC
++#define LINK_OS_DEFAULT_SPEC "%(link_os_linux_uclibc)"
++#else
+ #define LINK_OS_DEFAULT_SPEC "%(link_os_linux)"
++#endif
+ 
+ #define LINK_GCC_C_SEQUENCE_SPEC \
+   "%{static:--start-group} %G %L %{static:--end-group}%{!static:%G}"
+diff -urN gcc-4.0.0-dist/gcc/config/rs6000/sysv4.h gcc-4.0.0/gcc/config/rs6000/sysv4.h
+--- gcc-4.0.0-dist/gcc/config/rs6000/sysv4.h	2005-02-15 09:53:52.000000000 -0600
++++ gcc-4.0.0/gcc/config/rs6000/sysv4.h	2005-04-28 20:30:00.000000000 -0500
+@@ -956,6 +956,7 @@
+   mcall-linux  : %(link_os_linux)       ; \
+   mcall-gnu    : %(link_os_gnu)         ; \
+   mcall-netbsd : %(link_os_netbsd)      ; \
++  mcall-linux-uclibc : %(link_os_linux_uclibc); \
+   mcall-openbsd: %(link_os_openbsd)     ; \
+                : %(link_os_default)     }"
+ 
+@@ -1134,6 +1135,10 @@
+   %{rdynamic:-export-dynamic} \
+   %{!dynamic-linker:-dynamic-linker /lib/ld.so.1}}}"
+ 
++#define LINK_OS_LINUX_UCLIBC_SPEC "-m elf32ppclinux %{!shared: %{!static: \
++  %{rdynamic:-export-dynamic} \
++  %{!dynamic-linker:-dynamic-linker /lib/ld-uClibc.so.0}}}"
++
+ #if defined(HAVE_LD_EH_FRAME_HDR)
+ # define LINK_EH_SPEC "%{!static:--eh-frame-hdr} "
+ #endif
+@@ -1300,6 +1305,7 @@
+   { "link_os_sim",		LINK_OS_SIM_SPEC },			\
+   { "link_os_freebsd",		LINK_OS_FREEBSD_SPEC },			\
+   { "link_os_linux",		LINK_OS_LINUX_SPEC },			\
++  { "link_os_linux_uclibc",	LINK_OS_LINUX_UCLIBC_SPEC },		\
+   { "link_os_gnu",		LINK_OS_GNU_SPEC },			\
+   { "link_os_netbsd",		LINK_OS_NETBSD_SPEC },			\
+   { "link_os_openbsd",		LINK_OS_OPENBSD_SPEC },			\

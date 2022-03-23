@@ -1,0 +1,70 @@
+--- gcc-4.2.0-20070316/gcc/config/rs6000/sysv4.h.orig	2007-03-10 01:59:15.000000000 +0100
++++ gcc-4.2.0-20070316/gcc/config/rs6000/sysv4.h	2007-04-11 12:28:09.000000000 +0200
+@@ -902,7 +902,7 @@ extern int fixuplabelno;
+ #define LINUX_DYNAMIC_LINKER \
+   CHOOSE_DYNAMIC_LINKER (GLIBC_DYNAMIC_LINKER, UCLIBC_DYNAMIC_LINKER)
+ 
+-#define LINK_OS_LINUX_SPEC "-m elf32ppclinux %{!shared: %{!static: \
++#define LINK_OS_LINUX_SPEC "-m elf32ppclinux --hash-style=gnu %{!shared: %{!static: \
+   %{rdynamic:-export-dynamic} \
+   %{!dynamic-linker:-dynamic-linker " LINUX_DYNAMIC_LINKER "}}}"
+ 
+--- gcc-4.2.0-20070316/gcc/config/rs6000/linux64.h.orig	2006-07-14 17:54:23.000000000 +0200
++++ gcc-4.2.0-20070316/gcc/config/rs6000/linux64.h	2007-04-11 14:05:38.000000000 +0200
+@@ -351,11 +351,11 @@ extern int dot_symbols;
+   CHOOSE_DYNAMIC_LINKER (GLIBC_DYNAMIC_LINKER64, UCLIBC_DYNAMIC_LINKER64)
+ 
+ 
+-#define LINK_OS_LINUX_SPEC32 "-m elf32ppclinux %{!shared: %{!static: \
++#define LINK_OS_LINUX_SPEC32 "-m elf32ppclinux --hash-style=gnu %{!shared: %{!static: \
+   %{rdynamic:-export-dynamic} \
+   %{!dynamic-linker:-dynamic-linker " LINUX_DYNAMIC_LINKER32 "}}}"
+ 
+-#define LINK_OS_LINUX_SPEC64 "-m elf64ppc %{!shared: %{!static: \
++#define LINK_OS_LINUX_SPEC64 "-m elf64ppc --hash-style=gnu %{!shared: %{!static: \
+   %{rdynamic:-export-dynamic} \
+   %{!dynamic-linker:-dynamic-linker " LINUX_DYNAMIC_LINKER64 "}}}"
+ 
+--- gcc-4.2.0-20070316/gcc/config/i386/linux.h.orig	2006-04-07 00:16:11.000000000 +0200
++++ gcc-4.2.0-20070316/gcc/config/i386/linux.h	2007-04-11 12:28:09.000000000 +0200
+@@ -109,7 +109,7 @@ Boston, MA 02110-1301, USA.  */
+   { "dynamic_linker", LINUX_DYNAMIC_LINKER }
+ 
+ #undef	LINK_SPEC
+-#define LINK_SPEC "-m %(link_emulation) %{shared:-shared} \
++#define LINK_SPEC "-m %(link_emulation) --hash-style=gnu %{shared:-shared} \
+   %{!shared: \
+     %{!ibcs: \
+       %{!static: \
+--- gcc-4.2.0-20070316/gcc/config/arm/linux-elf.h.oirg	2007-04-11 14:16:06.000000000 +0200
++++ gcc-4.2.0-20070316/gcc/config/arm/linux-elf.h	2007-04-11 14:16:33.000000000 +0200
+@@ -36,7 +36,7 @@
+ 
+ #define SUBTARGET_CPU_DEFAULT TARGET_CPU_arm6
+ 
+-#define SUBTARGET_EXTRA_LINK_SPEC " -m armelf_linux -p"
++#define SUBTARGET_EXTRA_LINK_SPEC " -m armelf_linux -p --hash-style=gnu"
+ 
+ #undef  MULTILIB_DEFAULTS
+ #define MULTILIB_DEFAULTS \
+--- gcc-4.2.0-20070316/gcc/config/arm/linux-eabi.h.h.orig	2007-04-11 14:14:56.000000000 +0200
++++ gcc-4.2.0-20070316/gcc/config/arm/linux-eabi.h	2007-04-11 14:16:33.000000000 +0200
+@@ -48,7 +48,7 @@
+ #define SUBTARGET_CPU_DEFAULT TARGET_CPU_arm10tdmi
+ 
+ #undef SUBTARGET_EXTRA_LINK_SPEC
+-#define SUBTARGET_EXTRA_LINK_SPEC " -m armelf_linux_eabi"
++#define SUBTARGET_EXTRA_LINK_SPEC " -m armelf_linux_eabi --hash-style=gnu"
+ 
+ /* Use ld-linux.so.3 so that it will be possible to run "classic"
+    GNU/Linux binaries on an EABI system.  */
+--- gcc-4.2.0-20070316/gcc/config/mips/linux.h.orig	2007-04-11 14:23:08.000000000 +0200
++++ gcc-4.2.0-20070316/gcc/config/mips/linux.h	2007-04-11 14:23:10.000000000 +0200
+@@ -113,6 +113,7 @@ Boston, MA 02110-1301, USA.  */
+ #define LINK_SPEC \
+  "%(endian_spec) \
+   %{shared:-shared} \
++  --hash-style=gnu \
+   %{!shared: \
+     %{!ibcs: \
+       %{!static: \
